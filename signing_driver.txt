@@ -1,0 +1,39 @@
+Sign the Module (No Reboot)
+If you are on a virtual machine or cannot access the BIOS, you can create a local trusted key and sign the module yourself. This is more "involved" but keeps your system secure.
+
+1. Generate a Key Pair
+Bash
+
+openssl req -new -x509 -newkey rsa:2048 -keyout MOK.priv -outform DER -out MOK.der -nodes -days 36500 -subj "/CN=MyCustomKey/"
+2. Sign your Module
+You'll need to locate the sign-file tool in your kernel build directory (the path below is common for Ubuntu/Debian):
+
+Bash
+
+sudo /usr/src/linux-headers-$(uname -r)/scripts/sign-file sha256 ./MOK.priv ./MOK.der hello.ko
+3. Import the Key
+Bash
+
+sudo mokutil --import MOK.der
+It will ask for a password. Pick something simple like 1234.
+
+4. Enroll the Key
+Reboot your machine.
+
+You will see a blue screen called the MOK Management menu.
+
+Select Enroll MOK -> Continue -> Yes.
+
+Enter the password you chose in step 3.
+
+Reboot again.
+
+Now, your kernel will trust any module signed with your MOK.priv key.
+
+Verifying your Work
+After you successfully run sudo insmod ./hello.ko, you can verify it loaded by checking the kernel logs:
+
+Bash
+
+dmesg | tail -n 1
+Output: [ 1234.567] Hello World!

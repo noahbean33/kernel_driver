@@ -1,0 +1,1 @@
+savedcmd_/home/bean/Desktop/linux_kernel_driver/Module.symvers :=  scripts/mod/modpost -M -m -a      -o /home/bean/Desktop/linux_kernel_driver/Module.symvers -T /home/bean/Desktop/linux_kernel_driver/modules.order -i Module.symvers -e 
