@@ -9,6 +9,12 @@
 Module.symvers
 modules.order
 
+# Module signing keys (NEVER commit these!)
+MOK.der
+MOK.priv
+*.priv
+*.der
+
 # Backup files
 *~
 *.swp
