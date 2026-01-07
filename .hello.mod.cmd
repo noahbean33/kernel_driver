@@ -1,1 +1,0 @@
-savedcmd_/home/bean/Desktop/linux_kernel_driver/hello.mod := printf '%s\n'   hello.o | awk '!x[$$0]++ { print("/home/bean/Desktop/linux_kernel_driver/"$$0) }' > /home/bean/Desktop/linux_kernel_driver/hello.mod

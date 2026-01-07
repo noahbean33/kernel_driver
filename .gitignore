@@ -1,0 +1,20 @@
+# Kernel module build artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+*.o.d
+.tmp_versions/
+Module.symvers
+modules.order
+
+# Backup files
+*~
+*.swp
+*.swo
+
+# IDE files
+.vscode/
+.idea/
+*.code-workspace

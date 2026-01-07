@@ -1,1 +1,0 @@
-savedcmd_/home/bean/Desktop/linux_kernel_driver/hello.ko := ld -r -m elf_x86_64 -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T scripts/module.lds -o /home/bean/Desktop/linux_kernel_driver/hello.ko /home/bean/Desktop/linux_kernel_driver/hello.o /home/bean/Desktop/linux_kernel_driver/hello.mod.o
