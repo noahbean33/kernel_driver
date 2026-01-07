@@ -20,7 +20,7 @@ This project demonstrates fundamental kernel module development concepts:
 │   ├── dependencies.md    # Required packages and build tools
 │   ├── resources.md       # Useful references and kernel APIs
 │   ├── signing_driver.md  # Module signing instructions for Secure Boot
-│   └── guide.md           # Comprehensive kernel driver engineering guide
+│
 ├── Makefile               # Build configuration
 ├── .gitignore             # Git ignore rules
 └── README.md              # This file
@@ -126,14 +126,3 @@ All operations include proper error handling and bounds checking to prevent buff
 - **Buffer Size**: 100 bytes
 - **Supported Operations**: open, release, read, write
 - **Error Codes**: `EFAULT` (copy failures), `EINVAL` (invalid input), `EIO` (registration failure)
-
-## Troubleshooting
-
-**Module won't load**: Check `dmesg` for errors. Common issues include:
-- Secure Boot restrictions (requires module signing)
-- Major number 90 already in use
-- Missing kernel headers
-
-**Permission denied**: Ensure proper permissions on `/dev/mydev` or run commands with `sudo`
-
-**No output when reading**: Make sure you've written data to the device first
