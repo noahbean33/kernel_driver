@@ -1,0 +1,295 @@
+Writing a Simple Driver in Rust
+The Rust language ecosystem is growing each day, its popularity increasing, and with good reason. It’s the only mainstream language that provides memory and concurrency safety at compile time, with a powerful and rich build system (cargo), and a growing number of packages (crates).
+
+My daily driver is still C++, as most of my work is about low-level system and kernel programming, where the Windows C and COM APIs are easy to consume. Rust is a system programming language, however, which means it plays, or at least can play, in the same playground as C/C++. The main snag is the verbosity required when converting C types to Rust. This “verbosity” can be alleviated with appropriate wrappers and macros. I decided to try writing a simple WDM driver that is not useless – it’s a Rust version of the “Booster” driver I demonstrate in my book (Windows Kernel Programming), that allows changing the priority of any thread to any value.
+
+Getting Started
+To prepare for building drivers, consult Windows Drivers-rs, but basically you should have a WDK installation (either normal or the EWDK). Also, the docs require installing LLVM, to gain access to the Clang compiler. I am going to assume you have these installed if you’d like to try the following yourself.
+
+We can start by creating a new Rust library project (as a driver is a technically a DLL loaded into kernel space):
+
+cargo new --lib booster
+We can open the booster folder in VS Code, and begin are coding. First, there are some preparations to do in order for actual code to compile and link successfully. We need a build.rs file to tell cargo to link statically to the CRT. Add a build.rs file to the root booster folder, with the following code:
+
+fn main() -> Result<(), wdk_build::ConfigError> {
+    std::env::set_var("CARGO_CFG_TARGET_FEATURE", "crt-static");
+    wdk_build::configure_wdk_binary_build()
+}
+(Syntax highlighting is imperfect because the WordPress editor I use does not support syntax highlighting for Rust)
+
+Next, we need to edit cargo.toml and add all kinds of dependencies. The following is the minimum I could get away with:
+
+[package]
+name = "booster"
+version = "0.1.0"
+edition = "2021"
+ 
+[package.metadata.wdk.driver-model]
+driver-type = "WDM"
+ 
+[lib]
+crate-type = ["cdylib"]
+test = false
+ 
+[build-dependencies]
+wdk-build = "0.3.0"
+ 
+[dependencies]
+wdk = "0.3.0"       
+wdk-macros = "0.3.0"
+wdk-alloc = "0.3.0" 
+wdk-panic = "0.3.0" 
+wdk-sys = "0.3.0"   
+ 
+[features]
+default = []
+nightly = ["wdk/nightly", "wdk-sys/nightly"]
+ 
+[profile.dev]
+panic = "abort"
+lto = true
+ 
+[profile.release]
+panic = "abort"
+lto = true
+The important parts are the WDK crates dependencies. It’s time to get to the actual code in lib.rs.
+
+The Code
+We start by removing the standard library, as it does not exist in the kernel:
+
+#![no_std]
+Next, we’ll add a few use statements to make the code less verbose:
+
+use core::ffi::c_void;
+use core::ptr::null_mut;
+use alloc::vec::Vec;
+use alloc::{slice, string::String};
+use wdk::*;
+use wdk_alloc::WdkAllocator;
+use wdk_sys::ntddk::*;
+use wdk_sys::*;
+The wdk_sys crate provides the low level interop kernel functions. the wdk crate provides higher-level wrappers. alloc::vec::Vec is an interesting one. Since we can’t use the standard library, you would think the types like std::vec::Vec<> are not available, and technically that’s correct. However, Vec is actually defined in a lower level module named alloc::vec, that can be used outside the standard library. This works because the only requirement for Vec is to have a way to allocate and deallocate memory. Rust exposes this aspect through a global allocator object, that anyone can provide. Since we have no standard library, there is no global allocator, so one must be provided. Then, Vec (and String) can work normally:
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR: WdkAllocator = WdkAllocator;
+This is the global allocator provided by the WDK crates, that use ExAllocatePool2 and ExFreePool to manage allocations, just like would do manually.
+
+Next, we add two extern crates to get the support for the allocator and a panic handler – another thing that must be provided since the standard library is not included. Cargo.toml has a setting to abort the driver (crash the system) if any code panics:
+
+extern crate wdk_panic;
+extern crate alloc;
+Now it’s time to write the actual code. We start with DriverEntry, the entry point to any Windows kernel driver:
+
+1
+2
+3
+4
+5
+#[export_name = "DriverEntry"]
+pub unsafe extern "system" fn driver_entry(
+    driver: &mut DRIVER_OBJECT,
+    registry_path: PUNICODE_STRING,
+) -> NTSTATUS {
+Those familiar with kernel drivers will recognize the function signature (kind of). The function name is driver_entry to conform to the snake_case Rust naming convention for functions, but since the linker looks for DriverEntry, we decorate the function with the export_name attribute. You could use DriverEntry and just ignore or disable the compiler’s warning, if you prefer.
+
+We can use the familiar println! macro, that was reimplemented by calling DbgPrint, as you would if you were using C/C++. You can still call DbgPrint, mind you, but println! is just easier:
+
+println!("DriverEntry from Rust! {:p}", &driver);
+let registry_path = unicode_to_string(registry_path);
+println!("Registry Path: {}", registry_path);
+Unfortunately, it seems println! does not yet support a UNICODE_STRING, so we can write a function named unicode_to_string to convert a UNICODE_STRING to a normal Rust string:
+
+fn unicode_to_string(str: PCUNICODE_STRING) -> String {
+    String::from_utf16_lossy(unsafe {
+        slice::from_raw_parts((*str).Buffer, (*str).Length as usize / 2)
+    })
+}
+Back in DriverEntry, our next order of business is to create a device object with the name “\Device\Booster”:
+
+let mut dev = null_mut();
+let mut dev_name = UNICODE_STRING::default();
+string_to_ustring("\\Device\\Booster", &mut dev_name);
+ 
+let status = IoCreateDevice(
+    driver,
+    0,
+    &mut dev_name,
+    FILE_DEVICE_UNKNOWN,
+    0,
+    0u8,
+    &mut dev,
+);
+The string_to_ustring function converts a Rust string to a UNICODE_STRING:
+
+fn string_to_ustring(s: &str, uc: &mut UNICODE_STRING) -> Vec<u16> {
+    let mut wstring: Vec<_> = s.encode_utf16().collect();
+    uc.Length = wstring.len() as u16 * 2;
+    uc.MaximumLength = wstring.len() as u16 * 2;
+    uc.Buffer = wstring.as_mut_ptr();
+    wstring
+}
+This may look more complex than we would like, but think of this as a function that is written once, and then just used all over the place. In fact, maybe there is such a function already, and just didn’t look hard enough. But it will do for this driver.
+
+If device creation fails, we return a failure status:
+
+if !nt_success(status) {
+    println!("Error creating device 0x{:X}", status);
+    return status;
+}
+nt_success is similar to the NT_SUCCESS macro provided by the WDK headers.
+
+Next, we’ll create a symbolic link so that a standard CreateFile call could open a handle to our device:
+
+let mut sym_name = UNICODE_STRING::default();
+let _ = string_to_ustring("\\??\\Booster", &mut sym_name);
+let status = IoCreateSymbolicLink(&mut sym_name, &mut dev_name);
+if !nt_success(status) {
+    println!("Error creating symbolic link 0x{:X}", status);
+    IoDeleteDevice(dev);
+    return status;
+}
+All that’s left to do is initialize the device object with support for Buffered I/O (we’ll use IRP_MJ_WRITE for simplicity), set the driver unload routine, and the major functions we intend to support:
+
+    (*dev).Flags |= DO_BUFFERED_IO;
+ 
+    driver.DriverUnload = Some(boost_unload);
+    driver.MajorFunction[IRP_MJ_CREATE as usize] = Some(boost_create_close);
+    driver.MajorFunction[IRP_MJ_CLOSE as usize] = Some(boost_create_close);
+    driver.MajorFunction[IRP_MJ_WRITE as usize] = Some(boost_write);
+ 
+    STATUS_SUCCESS
+}
+Note the use of the Rust Option<> type to indicate the presence of a callback.
+
+The unload routine looks like this:
+
+unsafe extern "C" fn boost_unload(driver: *mut DRIVER_OBJECT) {
+    let mut sym_name = UNICODE_STRING::default();
+    string_to_ustring("\\??\\Booster", &mut sym_name);
+    let _ = IoDeleteSymbolicLink(&mut sym_name);
+    IoDeleteDevice((*driver).DeviceObject);
+}
+We just call IoDeleteSymbolicLink and IoDeleteDevice, just like a normal kernel driver would.
+
+Handling Requests
+We have three request types to handle – IRP_MJ_CREATE, IRP_MJ_CLOSE, and IRP_MJ_WRITE. Create and close are trivial – just complete the IRP successfully:
+
+unsafe extern "C" fn boost_create_close(_device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
+    (*irp).IoStatus.__bindgen_anon_1.Status = STATUS_SUCCESS;
+    (*irp).IoStatus.Information = 0;
+    IofCompleteRequest(irp, 0);
+    STATUS_SUCCESS
+}
+The IoStatus is an IO_STATUS_BLOCK but it’s defined with a union containing Status and Pointer. This seems to be incorrect, as Information should be in a union with Pointer (not Status). Anyway, the code accesses the Status member through the “auto generated” union, and it looks ugly. Definitely something to look into further. But it works.
+
+The real interesting function is the IRP_MJ_WRITE handler, that does the actual thread priority change. First, we’ll declare a structure to represent the request to the driver:
+
+#[repr(C)]
+struct ThreadData {
+    pub thread_id: u32,
+    pub priority: i32,
+}
+The use of repr(C) is important, to make sure the fields are laid out in memory just as they would with C/C++. This allows non-Rust clients to talk to the driver. In fact, I’ll test the driver with a C++ client I have that used the C++ version of the driver. The driver accepts the thread ID to change and the priority to use. Now we can start with boost_write:
+
+unsafe extern "C" fn boost_write(_device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
+    let data = (*irp).AssociatedIrp.SystemBuffer as *const ThreadData;
+First, we grab the data pointer from the SystemBuffer in the IRP, as we asked for Buffered I/O support. This is a kernel copy of the client’s buffer. Next, we’ll do some checks for errors:
+
+let status;
+loop {
+    if data == null_mut() {
+        status = STATUS_INVALID_PARAMETER;
+        break;
+    }
+    if (*data).priority < 1 || (*data).priority > 31 {
+        status = STATUS_INVALID_PARAMETER;
+        break;
+    }
+The loop statement creates an infinite block that can be exited with a break. Once we verified the priority is in range, it’s time to locate the thread object:
+
+let mut thread = null_mut();
+status = PsLookupThreadByThreadId(((*data).thread_id) as *mut c_void, &mut thread);
+if !nt_success(status) {
+    break;
+}
+PsLookupThreadByThreadId is the one to use. If it fails, it means the thread ID probably does not exist, and we break. All that’s left to do is set the priority and complete the request with whatever status we have:
+
+        KeSetPriorityThread(thread, (*data).priority);
+        ObfDereferenceObject(thread as *mut c_void);
+        break;
+    }
+    (*irp).IoStatus.__bindgen_anon_1.Status = status;
+    (*irp).IoStatus.Information = 0;
+    IofCompleteRequest(irp, 0);
+    status
+}
+That’s it!
+
+The only remaining thing is to sign the driver. It seems that the crates support signing the driver if an INF or INX files are present, but this driver is not using an INF. So we need to sign it manually before deployment. The following can be used from the root folder of the project:
+
+signtool sign /n wdk /fd sha256 target\debug\booster.dll
+The /n wdk uses a WDK test certificate typically created automatically by Visual Studio when building drivers. I just grab the first one in the store that starts with “wdk” and use it.
+
+The silly part is the file extension – it’s a DLL and there currently is no way to change it automatically as part of cargo build. If using an INF/INX, the file extension does change to SYS. In any case, file extensions don’t really mean that much – we can rename it manually, or just leave it as DLL.
+
+Installing the Driver
+The resulting file can be installed in the “normal” way for a software driver, such as using the sc.exe tool (from an elevated command window), on a machine with test signing on. Then sc start can be used to load the driver into the system:
+
+1
+2
+sc.exe sc create booster type= kernel binPath= c:\path_to_driver_file
+sc.exe start booster
+Testing the Driver
+I used an existing C++ application that talks to the driver and expects to pass the correct structure. It looks like this:
+
+#include <Windows.h>
+#include <stdio.h>
+ 
+struct ThreadData {
+    int ThreadId;
+    int Priority;
+};
+ 
+int main(int argc, const char* argv[]) {
+    if (argc < 3) {
+        printf("Usage: boost <tid> <priority>\n");
+        return 0;
+    }
+ 
+    int tid = atoi(argv[1]);
+    int priority = atoi(argv[2]);
+ 
+    HANDLE hDevice = CreateFile(L"\\\\.\\Booster",
+        GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0,
+        nullptr);
+ 
+    if (hDevice == INVALID_HANDLE_VALUE) {
+        printf("Failed in CreateFile: %u\n", GetLastError());
+        return 1;
+    }
+ 
+    ThreadData data;
+    data.ThreadId = tid;
+    data.Priority = priority;
+    DWORD ret;
+    if (WriteFile(hDevice, &data, sizeof(data),
+        &ret, nullptr))
+        printf("Success!!\n");
+    else
+        printf("Error (%u)\n", GetLastError());
+ 
+    CloseHandle(hDevice);
+ 
+    return 0;
+}
+Here is the result when changing a thread’s priority to 26 (ID 9408):
+
+
+Conclusion
+Writing kernel drivers in Rust is possible, and I’m sure the support for this will improve quickly. The WDK crates are at version 0.3, which means there is still a way to go. To get the most out of Rust in this space, safe wrappers should be created so that the code is less verbose, does not have unsafe blocks, and enjoys the benefits Rust can provide. Note, that I may have missed some wrappers in this simple implementation.
+
+You can find a couple of more samples for KMDF Rust drivers here.
+
+The code for this post can be found at https://github.com/zodiacon/Booster.
+
+Learn more about Rust at https://trainsec.net.

@@ -1,0 +1,5 @@
+https://docs.kernel.org/rust/quick-start.html
+
+https://rustmagazine.org/issue-1/rust-for-linux-brief-introduction/
+
+https://www.apriorit.com/dev-blog/rust-for-linux-driver
